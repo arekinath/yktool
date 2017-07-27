@@ -9,12 +9,17 @@
 import javax.smartcardio.*;
 import java.util.List;
 import java.util.ArrayList;
+import com.yubico.base.Configurator;
 
 public class yktool
 {
 	public List<Yubikey> keys;
+	Yubikey key = null;
 	public boolean hexInputs = false;
 	public boolean hexOutputs = false;
+	public byte[] curAccessCode = null;
+	public byte[] newAccessCode = null;
+	public long serial = -1;
 
 	private
 	yktool()
@@ -26,8 +31,6 @@ public class yktool
 	main(String[] argv)
 	{
 		yktool yk = new yktool();
-		byte[] curAccessCode = null;
-		byte[] newAccessCode = null;
 
 		if (argv.length == 0) {
 			usage();
@@ -48,13 +51,17 @@ public class yktool
 
 			} else if (argv[i].equals("--acc-code") ||
 			    argv[i].equals("-c")) {
-				curAccessCode = parseHex(
+				yk.curAccessCode = parseHex(
 				    argv[++i].getBytes(), -1);
 
 			} else if (argv[i].equals("--set-acc-code") ||
 			    argv[i].equals("-C")) {
-				newAccessCode = parseHex(
+				yk.newAccessCode = parseHex(
 				    argv[++i].getBytes(), -1);
+
+			} else if (argv[i].equals("--serial") ||
+			    argv[i].equals("-s")) {
+				yk.serial = Integer.parseInt(argv[++i]);
 
 			} else if (argv[i].charAt(0) == '-') {
 				usage();
@@ -79,6 +86,10 @@ public class yktool
 		} else if (op.equals("hmac") && args.size() == 1) {
 			yk.getHmac(Integer.parseInt(args.get(0)));
 
+		} else if (op.equals("program") && args.size() == 2 &&
+		    args.get(0).equals("hmac")) {
+			yk.programHmac(Integer.parseInt(args.get(1)));
+
 		} else {
 			usage();
 		}
@@ -94,9 +105,11 @@ public class yktool
 		System.err.format("  otp <slot #>                   Gets a one-time password\n");
 		System.err.format("  program hmac [opts] <slot #>   Configure a slot for HMAC. Key in stdin.\n");
 		System.err.format("  program otp [opts] <slot #> <pubid> <privid>\n");
-		System.err.format("                                 Configure a slot for OTP. Args in hex.\n");
+		System.err.format("                                 Configure a slot for OTP. Args in hex.\n\n");
 		System.err.format("Options:\n");
-		System.err.format("  --hex|-x                       stdin inputs are hex\n");
+		System.err.format("  --serial|-s <#>                Select yubikey by serial #\n");
+		System.err.format("  --hex-in|-x                    stdin inputs are hex\n");
+		System.err.format("  --hex-out|-X                   outputs on stderr are hex\n\n");
 		System.err.format("Options for programming:\n");
 		System.err.format("  --acc-code|-c <hex>            Access code for protected slot\n");
 		System.err.format("  --set-acc-code|-C <hex>        Change protection code\n");
@@ -119,8 +132,17 @@ public class yktool
 			Yubikey yk = Yubikey.tryCreate(card);
 			if (yk != null) {
 				keys.add(yk);
+				try {
+					if (yk.getSerial() == serial)
+						key = yk;
+				} catch (Exception e) {
+					// ignore it
+				}
 			}
 		}
+
+		if (key == null && keys.size() > 0)
+			key = keys.get(0);
 	}
 
 	private void
@@ -136,7 +158,7 @@ public class yktool
 	getOtp(int slotNum)
 	{
 		try {
-			String otp = keys.get(0).getOTP(slotNum);
+			String otp = key.getOTP(slotNum);
 			System.out.println(otp);
 		} catch (Exception e) {
 			System.err.format("error: %s\n", e.getMessage());
@@ -144,8 +166,8 @@ public class yktool
 		}
 	}
 
-	private void
-	getHmac(int slotNum)
+	private byte[]
+	readInput(int limit)
 	{
 		byte[] buf = new byte[1024];
 		int len = 0;
@@ -160,19 +182,36 @@ public class yktool
 				System.err.format("error: need at least 1 " +
 				    "byte of input\n");
 				System.exit(1);
+				return (null);
 			}
 			if (hexInputs) {
 				buf = parseHex(buf, len);
 				len = buf.length;
 			}
-			if (len > 64) {
-				System.err.format("error: hmac input is " +
-				    "max of 64 bytes\n");
+			if (len > limit) {
+				System.err.format("error: input is " +
+				    "max of %d bytes (you gave %d)\n",
+				    limit, len);
 				System.exit(1);
+				return (null);
 			}
 			byte[] inp = new byte[len];
 			System.arraycopy(buf, 0, inp, 0, len);
-			byte[] out = keys.get(0).getHMAC(slotNum, inp);
+			return (inp);
+
+		} catch (Exception e) {
+			System.err.format("error: %s\n", e.getMessage());
+			System.exit(1);
+			return (null);
+		}
+	}
+
+	private void
+	getHmac(int slotNum)
+	{
+		try {
+			byte[] inp = readInput(64);
+			byte[] out = key.getHMAC(slotNum, inp);
 			if (hexOutputs) {
 				System.out.println(toHex(out));
 			} else {
@@ -185,7 +224,40 @@ public class yktool
 		}
 	}
 
-	private static String
+	private void
+	programHmac(int slotNum)
+	{
+		try {
+			byte[] inp = readInput(20);
+			if (inp.length < 20) {
+				System.err.format("error: hmac secret must " +
+				    "be exactly 20 bytes (you gave %d)\n",
+				    inp.length);
+				System.exit(1);
+				return;
+			}
+
+			Configurator cfg = Yubikey.configForHMAC(inp);
+			if (curAccessCode != null) {
+				cfg.setCurAccCode(curAccessCode);
+				if (newAccessCode == null)
+					cfg.setAccCode(curAccessCode);
+			}
+			if (newAccessCode != null) {
+				cfg.setAccCode(newAccessCode);
+			}
+
+			key.program(slotNum, cfg);
+
+			System.err.format("Programmed slot %d ok\n", slotNum);
+
+		} catch (Exception e) {
+			System.err.format("error: %s\n", e.getMessage());
+			System.exit(1);
+		}
+	}
+
+	public static String
 	toHex(byte[] inp)
 	{
 		StringBuilder sb = new StringBuilder();
@@ -213,7 +285,7 @@ public class yktool
 		return (sb.toString());
 	}
 
-	private static byte[]
+	public static byte[]
 	parseHex(byte[] inp, int len)
 	{
 		if (len == -1)

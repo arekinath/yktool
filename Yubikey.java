@@ -211,12 +211,15 @@ public class Yubikey
 		final Configurator cfg = new Configurator();
 		cfg.setKey(Configurator.HMAC_SHA1_MODE, key);
 
-		cfg.setCfgFlags((byte)(Configurator.CFGFLAG_CHAL_HMAC));
+		cfg.setCfgFlags((byte)(
+		    Configurator.CFGFLAG_CHAL_HMAC |
+		    Configurator.CFGFLAG_HMAC_LT64));
 		cfg.setTktFlags(Configurator.TKTFLAG_CHAL_RESP);
 		cfg.setExtFlags((byte)(
 		    Configurator.EXTFLAG_SERIAL_API_VISIBLE |
 		    Configurator.EXTFLAG_SERIAL_USB_VISIBLE |
 		    Configurator.EXTFLAG_ALLOW_UPDATE));
+		cfg.setFixed(new byte[0]);
 		return (cfg);
 	}
 
@@ -252,10 +255,28 @@ public class Yubikey
 
 		final CommandAPDU cmd = new CommandAPDU(
 		    CLA_ISO, INS_API_REQ, cmdN, 0, confBuf);
+		System.err.println(yktool.toHex(cmd.getBytes()));
 		final ResponseAPDU resp = chan.transmit(cmd);
+		System.err.println(yktool.toHex(resp.getBytes()));
 		if (resp.getSW() == SW_OK) {
-			return;
+			final byte[] rd = resp.getData();
+			final byte oldPgmSeq = pgmSeq;
 
+			pgmSeq = rd[3];
+			touchLevel = (short)(rd[4] | (rd[5] << 8));
+
+			final int mask;
+			if (slot == 1)
+				mask = (touchLevel & CONFIG1_VALID);
+			else if (slot == 2)
+				mask = (touchLevel & CONFIG2_VALID);
+			else
+				throw (new Exception("Invalid Yubikey slot"));
+
+			if (pgmSeq <= oldPgmSeq || mask == 0) {
+				throw (new Exception (
+				    "Yubikey failed to write configuration"));
+			}
 		} else {
 			throw (new Exception(
 			    "Yubikey failed to write configuration"));
