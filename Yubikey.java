@@ -61,6 +61,8 @@ public class Yubikey
 	private byte pgmSeq;
 	private short touchLevel;
 
+	private byte[] accessCode;
+
 	private
 	Yubikey(Card c, CardChannel ch)
 	{
@@ -200,6 +202,63 @@ public class Yubikey
 		} else {
 			throw (new Exception(
 			    "Yubikey failed to return an HMAC"));
+		}
+	}
+
+	public static Configurator
+	configForHMAC(byte[] key)
+	{
+		final Configurator cfg = new Configurator();
+		cfg.setKey(Configurator.HMAC_SHA1_MODE, key);
+
+		cfg.setCfgFlags((byte)(Configurator.CFGFLAG_CHAL_HMAC));
+		cfg.setTktFlags(Configurator.TKTFLAG_CHAL_RESP);
+		cfg.setExtFlags((byte)(
+		    Configurator.EXTFLAG_SERIAL_API_VISIBLE |
+		    Configurator.EXTFLAG_SERIAL_USB_VISIBLE |
+		    Configurator.EXTFLAG_ALLOW_UPDATE));
+		return (cfg);
+	}
+
+	public static Configurator
+	configForOTP(byte[] publicId, byte[] privateId, byte[] secretKey)
+	{
+		final Configurator cfg = new Configurator();
+		cfg.setFixed(publicId);
+		cfg.setUid(privateId);
+		cfg.setKey(Configurator.AES_MODE, secretKey);
+
+		cfg.setExtFlags((byte)(
+		    Configurator.EXTFLAG_SERIAL_API_VISIBLE |
+		    Configurator.EXTFLAG_SERIAL_USB_VISIBLE |
+		    Configurator.EXTFLAG_ALLOW_UPDATE));
+		return (cfg);
+	}
+
+	public void
+	program(int slot, Configurator cfg) throws Exception
+	{
+		select();
+
+		final byte[] confBuf = cfg.getConfigStructure();
+
+		final byte cmdN;
+		if (slot == 1)
+			cmdN = CMD_SET_CONF_1;
+		else if (slot == 2)
+			cmdN = CMD_SET_CONF_2;
+		else
+			throw (new Exception("Invalid Yubikey slot"));
+
+		final CommandAPDU cmd = new CommandAPDU(
+		    CLA_ISO, INS_API_REQ, cmdN, 0, confBuf);
+		final ResponseAPDU resp = chan.transmit(cmd);
+		if (resp.getSW() == SW_OK) {
+			return;
+
+		} else {
+			throw (new Exception(
+			    "Yubikey failed to write configuration"));
 		}
 	}
 
