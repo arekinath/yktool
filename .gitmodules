@@ -1,0 +1,3 @@
+[submodule "yubico-j"]
+	path = yubico-j
+	url = https://github.com/Yubico/yubico-j
