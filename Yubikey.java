@@ -255,9 +255,7 @@ public class Yubikey
 
 		final CommandAPDU cmd = new CommandAPDU(
 		    CLA_ISO, INS_API_REQ, cmdN, 0, confBuf);
-		System.err.println(yktool.toHex(cmd.getBytes()));
 		final ResponseAPDU resp = chan.transmit(cmd);
-		System.err.println(yktool.toHex(resp.getBytes()));
 		if (resp.getSW() == SW_OK) {
 			final byte[] rd = resp.getData();
 			final byte oldPgmSeq = pgmSeq;
